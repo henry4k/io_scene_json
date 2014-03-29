@@ -9,12 +9,6 @@ bl_info = {
     "wiki_url": "http://github.com/henry4k/io_scene_json",
     "tracker_url": "http://github.com/henry4k/io_scene_json"}
 
-# To support reload properly, try to access a package var, if it's there, reload everything
-if "bpy" in locals():
-    import imp
-    if "export_map" in locals():
-        imp.reload(export_map)
-
 
 import bpy
 from bpy.props import StringProperty, FloatProperty, BoolProperty
