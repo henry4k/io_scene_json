@@ -29,90 +29,8 @@ def build_properties(obj):
 
 ##### Mesh {{{1
 
-class VertexAttribute():
-    def __init__( self, data_type, component_count ):
-        self.data_type = data_type
-        self.component_count = component_count
-        self.offset = 0
-
-    def get_data( self, vertex_index ):
-        pass
-
-class PositionAttribute(VertexAttribute):
-    def __init__( self, data ):
-        VertexAttribute.__init__(
-            self,
-            data_type='float',
-            component_count=3)
-
-        self.data = data
-
-    def get_data( self, vertex_index ):
-        v = self.data[vertex_index].co
-        return (v[0], v[1], v[2])
-
-class NormalAttribute(VertexAttribute):
-    def __init__( self, data ):
-        VertexAttribute.__init__(
-            self,
-            data_type='float',
-            component_count=3)
-
-        self.data = data
-
-    def get_data( self, vertex_index ):
-        v = self.data[vertex_index].normal
-        return (v[0], v[1], v[2])
-
-class ColorAttribute(VertexAttribute):
-    def __init__( self, data ):
-        VertexAttribute.__init__(
-            self,
-            data_type='float',
-            component_count=3)
-
-        self.data = data
-
-    def get_data( self, vertex_index ):
-        v = self.data[vertex_index].color
-        return (v.r, v.g, v.b)
-
-class TexCoordAttribute(VertexAttribute):
-    def __init__( self, data ):
-        VertexAttribute.__init__(
-            self,
-            data_type='float',
-            component_count=2)
-
-        self.data = data
-
-    def get_data( self, vertex_index ):
-        v = self.data[vertex_index].uv
-        return (v[0], v[1])
-
-def set_attribute_offsets( attributes ):
-    offset = 0
-    for attribute in attributes.values():
-        attribute.offset = offset
-        offset = offset + attribute.component_count
-
-def get_vertex_size( attributes ):
-    size = 0
-    for attribute in attributes.values():
-        size = size + attribute.component_count
-    return size
-
-def build_vertex_attribute_tree( attributes ):
-    tree = {}
-    for attribute_name, attribute in attributes.items():
-        tree[attribute_name] = {
-            'data_type': attribute.data_type,
-            'component_count': attribute.component_count,
-            'offset': attribute.offset }
-    return tree
-
 def build_mesh(obj):
-    r = {}
+    r = dict()
 
     # Prepare mesh
     try:
@@ -120,7 +38,7 @@ def build_mesh(obj):
                 scene=SCENE,
                 apply_modifiers=True,
                 settings='PREVIEW',
-                calc_tessface=False)
+                calc_tessface=True)
     except RuntimeError:
         mesh = None
 
@@ -137,49 +55,96 @@ def build_mesh(obj):
         bm.to_mesh(mesh)
         bm.free()
 
+    mesh.calc_normals()
 
-    # Add vertex format
-    attributes = {}
+    if not mesh.tessfaces and mesh.polygons:
+        mesh.calc_tessface()
 
-    attributes['position'] = PositionAttribute(mesh.vertices)
-    attributes['normal'] = NormalAttribute(mesh.vertices)
+    uv_layer = None
+    if mesh.tessface_uv_textures.active:
+        uv_layer = mesh.tessface_uv_textures.active.data
 
-    for vertex_color in mesh.vertex_colors:
-        attributes[vertex_color.name] = ColorAttribute(vertex_color.data)
+    color_layer = None
+    if mesh.tessface_vertex_colors.active:
+        color_layer = mesh.tessface_vertex_colors.active.data
 
-    for uv_layer in mesh.uv_layers:
-        attributes[uv_layer.name] = TexCoordAttribute(uv_layer.data)
+    def rvec3d(v):
+        return round(v[0], 6), round(v[1], 6), round(v[2], 6)
 
-    set_attribute_offsets(attributes)
+    def rvec2d(v):
+        return round(v[0], 6), round(v[1], 6)
 
-    r['vertex_format'] = build_vertex_attribute_tree(attributes)
-    r['primitive'] = 'triangles' # See TRIANGULATE
+    vertices_out = []
+    faces_out = [[] for f in range(len(mesh.tessfaces))]
+    vdict = [{} for i in range(len(mesh.vertices))]
+    vertex_count = 0
 
+    color = uv = uv_key = normal = normal_key = None
 
-    # Add vertex data
-    vertex_size = get_vertex_size(attributes)
-    vertex_count = len(mesh.vertices)
-    vertex_data = [0.0] * vertex_size * vertex_count
+    for face_index, face in enumerate(mesh.tessfaces):
+        smooth = face.use_smooth
+        if not smooth:
+            normal = face.normal[:]
+            normal_key = rvec3d(normal)
 
-    for vertex in range(0, vertex_count):
-        vertex_start = vertex*vertex_size
+        if uv_layer:
+            uvs = uv_layer[face_index]
+            uvs = (uvs.uv1,
+                   uvs.uv2,
+                   uvs.uv3,
+                   uvs.uv4)
 
-        for attribute in attributes.values():
-            attribute_value = attribute.get_data(vertex)
-            assert len(attribute_value) == attribute.component_count
+        if color_layer:
+            colors = color_layer[face_index]
+            colors = (colors.color1[:],
+                      colors.color2[:],
+                      colors.color3[:],
+                      colors.color4[:])
 
-            for component_index, component_value in enumerate(attribute_value):
-                index = vertex_start + attribute.offset + component_index
-                vertex_data[index] = component_value
+        face_out = faces_out[face_index]
+        for face_vertex_index, vertex_index in enumerate(face.vertices):
+            vertex = mesh.vertices[vertex_index]
 
-    r['vertices'] = vertex_data
+            if smooth:
+                normal = vertex.normal[:]
+                normal_key = rvec3d(normal)
 
-    face_count = len(mesh.polygons)
-    faces = [ [0,0,0] ]*face_count
-    for face in range(0, face_count):
-        f = mesh.polygons[face].vertices
-        faces[face] = (f[0], f[1], f[2])
-    r['faces'] = faces
+            if uv_layer:
+                uv = (uvs[face_vertex_index][0],
+                      uvs[face_vertex_index][1])
+                uv_key = rvec2d(uv)
+
+            if color_layer:
+                color = colors[face_vertex_index]
+
+            key = normal_key, uv_key, color
+
+            vdict_local = vdict[vertex_index]
+            face_out_vertex_index = vdict_local.get(key)
+
+            if face_out_vertex_index is None:
+                face_out_vertex_index = vdict_local[key] = vertex_count
+
+                vertex_out = dict(x=vertex.co[0],
+                                  y=vertex.co[1],
+                                  z=vertex.co[2],
+                                  nx=normal[0],
+                                  ny=normal[1],
+                                  nz=normal[2])
+                if uv_layer:
+                    vertex_out.update(dict(tx=uv[0],
+                                           ty=uv[1]))
+                if color_layer:
+                    vertex_out.update(dict(r=color[0],
+                                           g=color[1],
+                                           b=color[2]))
+                vertices_out.append(vertex_out)
+                vertex_count += 1
+
+            face_out.append(face_out_vertex_index)
+
+    r['vertices'] = vertices_out
+    r['faces'] = faces_out
 
     return r
 
@@ -187,7 +152,7 @@ def build_mesh(obj):
 ##### Object {{{1
 
 def build_object(obj):
-    tree = {}
+    tree = dict()
 
     if obj.type == 'MESH':
         mesh = build_mesh(obj)
@@ -210,7 +175,7 @@ def is_blacklisted_object(obj):
     return False
 
 def build_children(children):
-    tree = {}
+    tree = dict()
     for child in children:
         if is_blacklisted_object(child):
             continue
@@ -222,7 +187,7 @@ def build_children(children):
 
 def save(scene,
          filepath=None,
-         triangulate=False):
+         triangulate=True):
 
     global TRIANGULATE
     TRIANGULATE = triangulate
@@ -237,7 +202,7 @@ def save(scene,
     tree = build_children(filter(filter_children, objects))
 
     file = open(filepath, 'w', encoding='utf8', newline='\n')
-    file.write(json.dumps(tree, sort_keys=True, indent=4, separators=(',', ': ')))
+    json.dump(tree, file, separators=(',',':'))
     file.close()
 
     return {'FINISHED'}
